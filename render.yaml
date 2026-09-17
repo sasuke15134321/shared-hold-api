@@ -13,7 +13,7 @@ services:
       - key: TEST_MODE
         value: "false"
       - key: SHARED_HOLD_DB_PATH
-        value: "/opt/render/project/src/shared_hold.db"
+        value: "/var/data/shared_hold.db"
       - key: CDP_API_KEY_ID
         sync: false
       - key: CDP_API_KEY_SECRET
