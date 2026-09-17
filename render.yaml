@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: shared-hold-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: WALLET_ADDRESS
+        value: 0x60c402878EfcEcAe5733A88075328Aa2320C39BE
+      - key: PRICE_USDC
+        value: "0.005"
+      - key: TEST_MODE
+        value: "false"
+      - key: SHARED_HOLD_DB_PATH
+        value: "/opt/render/project/src/shared_hold.db"
+      - key: CDP_API_KEY_ID
+        sync: false
+      - key: CDP_API_KEY_SECRET
+        sync: false
+      - key: FACILITATOR_PRIVATE_KEY
+        sync: false

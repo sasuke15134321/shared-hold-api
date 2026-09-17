@@ -1,0 +1,64 @@
+# Shared Hold API v0.1
+SQLite-backed shared boundary storage for AI agents. Pay-per-hold via x402 USDC on Base.
+
+## What it does
+Store UTF-8 payloads to a shared SQLite boundary and retrieve them by ID. Payloads are stored
+with SHA-256 integrity verification. GET is non-destructive and idempotent — the same hold_id
+always returns the same payload. There is no "restore" or state transition; everything is always
+in HELD state and readable any number of times.
+
+## Endpoints
+
+### POST /hold (paid: 0.005 USDC per successful hold)
+Store a UTF-8 payload to the shared boundary.
+
+Input:
+- payload: string (UTF-8 text to store)
+- created_by: string (non-empty identifier for the caller)
+
+Output:
+- hold_id: unique ID for this hold (use to retrieve later)
+- content_hash: SHA-256 hex digest of the stored payload
+- size: byte length
+- created_at: ISO 8601 UTC timestamp
+- created_by: echo of the caller identifier
+
+If you receive HTTP 402 Payment Required:
+1. Read the x402Version=2 payment requirements in the response body.
+2. Pay using a compatible x402 client (USDC on Base, eip155:8453).
+3. Retry the same request with the payment in the X-PAYMENT or PAYMENT-SIGNATURE header.
+
+### GET /hold/{hold_id} (free)
+Retrieve the stored UTF-8 payload by hold_id.
+
+Output:
+- hold_id: the requested ID
+- payload: the stored UTF-8 text
+
+Returns 404 if hold_id does not exist.
+
+### GET /hold (free)
+List all stored items with metadata (no payload bytes).
+
+Output:
+- items: list of {hold_id, created_at, created_by, content_hash, size}
+- total: count of items
+
+## Free endpoints
+GET /health — health check
+GET /.well-known/x402.json — x402 endpoint discovery
+GET /ai-agent-policy.json — agent policy
+
+## Key properties
+- Non-destructive: GET never removes or modifies the stored payload
+- Idempotent reads: same hold_id always returns the same payload
+- SHA-256 integrity: corrupted payloads raise RuntimeError (HTTP 500)
+- No state machine: there is no HELD/ACTIVE/RELEASED transition
+
+## Payment details
+- Network: Base (eip155:8453)
+- Asset: USDC (0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913)
+- Recipient: 0x60c402878EfcEcAe5733A88075328Aa2320C39BE
+- Price: 0.005 USDC per successful POST /hold
+- GET /hold/{id} and GET /hold are always free
+- Protocol: x402 v2 (scheme: exact)

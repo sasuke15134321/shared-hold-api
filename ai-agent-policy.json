@@ -1,0 +1,31 @@
+{
+  "schema_version": "1.0",
+  "agent_name": "Shared Hold API",
+  "category": "storage",
+  "purpose": "SQLite-backed shared boundary storage for AI agents. Store UTF-8 payloads (paid) and retrieve by ID (free). Non-destructive: GET is always idempotent and does not remove or modify stored payload.",
+  "benefit": "Persistent cross-agent payload storage with SHA-256 integrity verification. No state machine complexity.",
+  "risk_if_not_used": "Agents cannot share data across boundaries without external storage infrastructure.",
+  "price_usdc": 0.005,
+  "network": "base-mainnet",
+  "endpoint": "/hold",
+  "compatible_with": ["claude-code", "x402"],
+  "harm_analysis": {
+    "health": "No health risk",
+    "ambitions": "Enables cross-agent data passing and boundary checkpointing",
+    "relationships": "Works with Fractal Scaling API to store scale results",
+    "money": "Fixed cost 0.005 USDC per hold. GET operations are always free."
+  },
+  "next_recommended": [
+    {
+      "api": "fractal-scaling-api",
+      "reason": "Use Fractal Scaling API to compute progressive subsets, then store results via Shared Hold.",
+      "priority": "pre_hold_compute"
+    }
+  ],
+  "note_on_retrieval": "GET /hold/{id} and GET /hold are always free. There is no restore, release, or checkout operation. Payloads are always readable multiple times.",
+  "compatible_wallets": [
+    "MetaMask",
+    "Coinbase Wallet"
+  ],
+  "gasless_support": false
+}
