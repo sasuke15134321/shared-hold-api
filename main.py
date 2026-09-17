@@ -72,6 +72,42 @@ def _payment_required_body(method: str, url: str) -> dict:
             "extra": {"name": "USD Coin", "version": "2"},
             "resource": {"method": method, "mimeType": "application/json"},
         }],
+        "extensions": {
+            "bazaar": {
+                "discoverable": True,
+                "info": {
+                    "input": {
+                        "type": "http",
+                        "method": "POST",
+                        "bodyType": "json",
+                        "body": {
+                            "payload": "your-data-here",
+                            "created_by": "agent-001",
+                        },
+                    },
+                    "output": {
+                        "type": "json",
+                        "example": {
+                            "hold_id": "c408edf5387a4686ac8f849c564baf36",
+                            "content_hash": "08393bdd72e0d69ed5969a34cbde5a871e661216e1b36ca3610c0d9fe2ab8ec7",
+                            "size": 15,
+                            "created_at": "2026-09-17T06:49:12.022842+00:00",
+                            "created_by": "agent-001",
+                        },
+                    },
+                },
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "hold_id": {"type": "string"},
+                        "content_hash": {"type": "string"},
+                        "size": {"type": "integer"},
+                        "created_at": {"type": "string"},
+                        "created_by": {"type": "string"},
+                    },
+                },
+            }
+        },
     }
 
 
