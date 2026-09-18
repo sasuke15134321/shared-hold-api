@@ -63,6 +63,7 @@ paths:
     get:
       summary: Discover — List all stored items (free)
       operationId: discover
+      security: []
       tags:
         - Core
       description: |
@@ -87,6 +88,7 @@ paths:
     get:
       summary: Get — Retrieve stored payload by ID (free)
       operationId: get_hold
+      security: []
       tags:
         - Core
       description: |

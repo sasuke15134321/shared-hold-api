@@ -51,6 +51,23 @@ payment_verifier = PaymentVerifier()
 _core = SharedHold(DB_PATH)
 
 
+@app.middleware("http")
+async def hold_payment_gate(request: Request, call_next):
+    if request.url.path == "/hold" and request.method == "POST":
+        if not TEST_MODE:
+            payment_header = (
+                request.headers.get("PAYMENT-SIGNATURE") or request.headers.get("X-PAYMENT")
+            )
+            if not payment_header:
+                body = _payment_required_body("POST", str(request.url))
+                return JSONResponse(
+                    status_code=402,
+                    content=body,
+                    headers={"Payment-Required": base64.b64encode(json.dumps(body).encode()).decode()},
+                )
+    return await call_next(request)
+
+
 def _payment_required_body(method: str, url: str) -> dict:
     amount_units = str(round(float(PRICE_USDC) * 1_000_000))
     return {
@@ -148,13 +165,6 @@ async def hold(payload: HoldRequest, request: Request):
         payment_header = (
             request.headers.get("PAYMENT-SIGNATURE") or request.headers.get("X-PAYMENT")
         )
-        if not payment_header:
-            body = _payment_required_body("POST", str(request.url))
-            return JSONResponse(
-                status_code=402,
-                content=body,
-                headers={"Payment-Required": base64.b64encode(json.dumps(body).encode()).decode()},
-            )
         is_valid = await payment_verifier.verify_payment(payment_header, WALLET_ADDRESS, PRICE_USDC)
         if not is_valid:
             raise HTTPException(status_code=402, detail="Payment verification failed")
