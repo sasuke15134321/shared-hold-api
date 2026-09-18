@@ -2,114 +2,75 @@
 # -*- coding: utf-8 -*-
 """
 Shared Hold API — MCP Server
-Exposes POST /hold, GET /hold/{id}, GET /hold as MCP tools via stdio transport.
-Requires: pip install mcp httpx python-dotenv
+stdio / Streamable HTTP dual transport via FastMCP.
 """
-import asyncio, json, os, sys
-from pathlib import Path
+import os, json
+import httpx
+from mcp.server.fastmcp import FastMCP
 
-try:
-    import httpx
-    from mcp.server import Server
-    from mcp.server.stdio import stdio_server
-    from mcp import types
-except ImportError:
-    print("Install: pip install mcp httpx", file=sys.stderr)
-    sys.exit(1)
+BASE_URL = os.getenv("SHARED_HOLD_URL", "https://shared-hold-api.onrender.com").rstrip("/")
+PAYMENT_TOKEN = os.getenv("MCP_PAYMENT_TOKEN", "")
 
-from dotenv import load_dotenv
-load_dotenv(Path(__file__).parent / ".env")
-
-BASE_URL = os.getenv("SHARED_HOLD_URL", "http://localhost:8000")
-API_KEY  = os.getenv("X_PAYMENT", "")
-
-server = Server("shared-hold-api")
+mcp = FastMCP("Shared Hold API")
 
 
-@server.list_tools()
-async def list_tools() -> list[types.Tool]:
-    return [
-        types.Tool(
-            name="hold",
-            description=(
-                "Store a UTF-8 payload to the shared boundary. "
-                "Paid: 0.005 USDC per successful hold via x402. "
-                "Returns hold_id, content_hash, size, created_at, created_by."
-            ),
-            inputSchema={
-                "type": "object",
-                "required": ["payload", "created_by"],
-                "properties": {
-                    "payload": {
-                        "type": "string",
-                        "description": "UTF-8 text to store",
-                    },
-                    "created_by": {
-                        "type": "string",
-                        "description": "Caller identifier (non-empty string)",
-                    },
-                    "x_payment": {
-                        "type": "string",
-                        "description": "x402 v2 payment header value (base64-encoded signed payment)",
-                    },
-                },
-            },
-        ),
-        types.Tool(
-            name="get_hold",
-            description=(
-                "Retrieve a stored payload by hold_id. Free, non-destructive, idempotent. "
-                "Returns {hold_id, payload}. 404 if not found."
-            ),
-            inputSchema={
-                "type": "object",
-                "required": ["hold_id"],
-                "properties": {
-                    "hold_id": {
-                        "type": "string",
-                        "description": "The hold_id returned by the hold tool",
-                    },
-                },
-            },
-        ),
-        types.Tool(
-            name="discover_holds",
-            description=(
-                "List all stored items with metadata (hold_id, created_at, created_by, content_hash, size). "
-                "Free. Payload bytes are not included."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {},
-            },
-        ),
-    ]
+def _headers() -> dict:
+    h = {"Content-Type": "application/json"}
+    if PAYMENT_TOKEN:
+        h["PAYMENT-SIGNATURE"] = PAYMENT_TOKEN
+    return h
 
 
-@server.call_tool()
-async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
+@mcp.tool()
+async def hold(payload: str, created_by: str) -> str:
+    """
+    Store a UTF-8 payload to the shared boundary (0.005 USDC).
+    Returns hold_id, content_hash, size, created_at, created_by.
+
+    Args:
+        payload:    UTF-8 text to store
+        created_by: Caller identifier (non-empty string)
+    """
     async with httpx.AsyncClient(timeout=60.0) as client:
-        if name == "hold":
-            x_payment = arguments.pop("x_payment", API_KEY)
-            headers = {"Content-Type": "application/json"}
-            if x_payment:
-                headers["X-PAYMENT"] = x_payment
-            resp = await client.post(f"{BASE_URL}/hold", json=arguments, headers=headers)
-        elif name == "get_hold":
-            hold_id = arguments["hold_id"]
-            resp = await client.get(f"{BASE_URL}/hold/{hold_id}")
-        elif name == "discover_holds":
-            resp = await client.get(f"{BASE_URL}/hold")
-        else:
-            raise ValueError(f"Unknown tool: {name}")
-
-    return [types.TextContent(type="text", text=json.dumps(resp.json(), ensure_ascii=False))]
+        resp = await client.post(
+            f"{BASE_URL}/hold",
+            json={"payload": payload, "created_by": created_by},
+            headers=_headers(),
+        )
+        if resp.status_code == 402:
+            return json.dumps({"error": "Payment Required (x402)", "x402": resp.json()}, ensure_ascii=False)
+        resp.raise_for_status()
+        return json.dumps(resp.json(), ensure_ascii=False, indent=2)
 
 
-async def main():
-    async with stdio_server() as (read_stream, write_stream):
-        await server.run(read_stream, write_stream, server.create_initialization_options())
+@mcp.tool()
+async def get(hold_id: str) -> str:
+    """
+    Retrieve a stored payload by hold_id. Free, non-destructive, idempotent.
+    Returns {hold_id, payload}. Returns error if not found.
+
+    Args:
+        hold_id: The hold_id returned by the hold tool
+    """
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.get(f"{BASE_URL}/hold/{hold_id}")
+        if resp.status_code == 404:
+            return json.dumps({"error": f"hold_id not found: {hold_id}"}, ensure_ascii=False)
+        resp.raise_for_status()
+        return json.dumps(resp.json(), ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def discover() -> str:
+    """
+    List all stored items with metadata (hold_id, created_at, created_by, content_hash, size).
+    Free. Payload bytes are not included.
+    """
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.get(f"{BASE_URL}/hold")
+        resp.raise_for_status()
+        return json.dumps(resp.json(), ensure_ascii=False, indent=2)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    mcp.run()

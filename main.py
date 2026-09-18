@@ -306,6 +306,56 @@ async def openapi_yaml_endpoint():
     )
 
 
+@app.get("/.well-known/mcp/server-card.json", include_in_schema=False)
+async def mcp_server_card():
+    return {
+        "serverInfo": {"name": "shared-hold-api", "version": "0.1.0"},
+        "tools": [
+            {
+                "name": "hold",
+                "description": "Store a UTF-8 payload to the shared boundary (0.005 USDC). Returns hold_id, content_hash, size, created_at, created_by.",
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["payload", "created_by"],
+                    "properties": {
+                        "payload": {"type": "string", "description": "UTF-8 text to store"},
+                        "created_by": {"type": "string", "description": "Caller identifier (non-empty string)"},
+                    },
+                },
+            },
+            {
+                "name": "get",
+                "description": "Retrieve a stored payload by hold_id. Free, non-destructive, idempotent. Returns {hold_id, payload}.",
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["hold_id"],
+                    "properties": {
+                        "hold_id": {"type": "string", "description": "The hold_id returned by the hold tool"},
+                    },
+                },
+            },
+            {
+                "name": "discover",
+                "description": "List all stored items with metadata (hold_id, created_at, created_by, content_hash, size). Free. Payload bytes are not included.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {},
+                },
+            },
+        ],
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
+
+
+# ── MCP Server mount (Smithery registration at /mcp) ──────────────────────────
+from mcp_server import mcp as _mcp_server  # noqa: E402
+
+try:
+    app.mount("/mcp", _mcp_server.streamable_http_app())
+except Exception as _mcp_err:
+    import logging
+    logging.getLogger(__name__).warning(f"MCP mount failed: {_mcp_err}")
