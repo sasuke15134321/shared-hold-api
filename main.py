@@ -193,6 +193,7 @@ async def hold(payload: HoldRequest, request: Request):
         "Free, non-destructive, and idempotent — same hold_id always returns the same payload."
     ),
     tags=["Core"],
+    openapi_extra={"security": []},
 )
 async def get_hold(hold_id: str):
     try:
@@ -212,6 +213,7 @@ async def get_hold(hold_id: str):
         "Payload bytes are not included. Free, no payment required."
     ),
     tags=["Core"],
+    openapi_extra={"security": []},
 )
 async def discover():
     rows = _core.discover()
