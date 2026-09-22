@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 from typing import Optional
+from contextlib import asynccontextmanager
 
 from payment_verifier import PaymentVerifier
 from shared_hold import SharedHold
@@ -26,6 +27,17 @@ DB_PATH = os.getenv("SHARED_HOLD_DB_PATH", str(Path(__file__).parent / "shared_h
 _NETWORK = "eip155:8453"
 _USDC_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 
+_mcp_server = None  # populated at bottom of file; lifespan sees final value at startup
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    if _mcp_server is not None:
+        async with _mcp_server.session_manager.run():
+            yield
+    else:
+        yield
+
 app = FastAPI(
     title="Shared Hold API",
     version="0.1.0",
@@ -37,6 +49,7 @@ app = FastAPI(
         "Payload is stored with SHA-256 integrity verification. "
         "Non-destructive: GET never removes or transitions the payload state."
     ),
+    lifespan=lifespan,
 )
 
 app.add_middleware(

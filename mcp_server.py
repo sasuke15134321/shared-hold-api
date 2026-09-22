@@ -11,7 +11,7 @@ from mcp.server.fastmcp import FastMCP
 BASE_URL = os.getenv("SHARED_HOLD_URL", "https://shared-hold-api.onrender.com").rstrip("/")
 PAYMENT_TOKEN = os.getenv("MCP_PAYMENT_TOKEN", "")
 
-mcp = FastMCP("Shared Hold API")
+mcp = FastMCP("Shared Hold API", streamable_http_path="/")
 
 
 def _headers() -> dict:
