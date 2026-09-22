@@ -7,11 +7,12 @@ stdio / Streamable HTTP dual transport via FastMCP.
 import os, json
 import httpx
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 BASE_URL = os.getenv("SHARED_HOLD_URL", "https://shared-hold-api.onrender.com").rstrip("/")
 PAYMENT_TOKEN = os.getenv("MCP_PAYMENT_TOKEN", "")
 
-mcp = FastMCP("Shared Hold API", streamable_http_path="/")
+mcp = FastMCP("Shared Hold API", streamable_http_path="/", transport_security=TransportSecuritySettings(allowed_hosts=["shared-hold-api.onrender.com", "127.0.0.1:8002", "localhost:8002"]))
 
 
 def _headers() -> dict:
