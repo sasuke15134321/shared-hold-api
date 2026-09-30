@@ -36,5 +36,20 @@ class SharedHold:
         if len(p)!=n or hashlib.sha256(p).hexdigest()!=h: raise RuntimeError("integrity failure")
         return p
     def discover(self):
+        """Backward-compatible unbounded discovery for local/core callers."""
         with closing(self._con()) as c:
             return c.execute("SELECT hold_id,created_at,created_by,content_hash,size FROM holds ORDER BY created_at,hold_id").fetchall()
+    def discover_page(self, *, limit=100, offset=0):
+        if not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise ValueError("limit must be an integer in [1, 100]")
+        if not isinstance(offset, int) or offset < 0:
+            raise ValueError("offset must be a non-negative integer")
+        with closing(self._con()) as c:
+            return c.execute(
+                "SELECT hold_id,created_at,created_by,content_hash,size "
+                "FROM holds ORDER BY created_at,hold_id LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+    def count(self):
+        with closing(self._con()) as c:
+            return c.execute("SELECT COUNT(*) FROM holds").fetchone()[0]
