@@ -12,7 +12,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 from fastapi import FastAPI, Request, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
-from pydantic import BaseModel, Field
+from starlette.middleware.body_limit import RequestBodyLimitMiddleware
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 from contextlib import asynccontextmanager
 
@@ -22,6 +23,9 @@ from shared_hold import SharedHold
 WALLET_ADDRESS = os.getenv("WALLET_ADDRESS", "0x60c402878EfcEcAe5733A88075328Aa2320C39BE")
 PRICE_USDC = os.getenv("PRICE_USDC", "0.005")
 TEST_MODE = os.getenv("TEST_MODE", "false").lower() == "true"
+MAX_PAYLOAD_BYTES = 256 * 1024
+MAX_CREATED_BY_CHARS = 128
+MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024
 DB_PATH = os.getenv("SHARED_HOLD_DB_PATH", str(Path(__file__).parent / "shared_hold.db"))
 
 _NETWORK = "eip155:8453"
@@ -80,6 +84,11 @@ async def hold_payment_gate(request: Request, call_next):
                 )
     return await call_next(request)
 
+
+app.add_middleware(
+    RequestBodyLimitMiddleware,
+    max_body_size=MAX_REQUEST_BODY_BYTES,
+)
 
 def _payment_required_body(method: str, url: str) -> dict:
     amount_units = str(round(float(PRICE_USDC) * 1_000_000))
@@ -149,9 +158,20 @@ class HoldRequest(BaseModel):
     created_by: str = Field(
         ...,
         min_length=1,
+        max_length=MAX_CREATED_BY_CHARS,
         description="Identifier for the caller (agent ID, name, or any non-empty string).",
     )
 
+
+    @field_validator("payload")
+    @classmethod
+    def validate_payload_size(cls, value: str) -> str:
+        size = len(value.encode("utf-8"))
+        if size > MAX_PAYLOAD_BYTES:
+            raise ValueError(
+                f"payload exceeds maximum size of {MAX_PAYLOAD_BYTES} UTF-8 bytes"
+            )
+        return value
 
 class HoldReceiptResponse(BaseModel):
     hold_id: str
