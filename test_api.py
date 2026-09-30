@@ -99,8 +99,10 @@ def test_discover_returns_list():
     data = r.json()
     assert "items" in data
     assert "total" in data
+    assert "total_available" in data
     assert isinstance(data["items"], list)
     assert data["total"] == len(data["items"])
+    assert data["total"] <= 100
 
 
 def test_discover_includes_held_items():
@@ -108,7 +110,7 @@ def test_discover_includes_held_items():
     client.post("/hold", json={"payload": "item B", "created_by": "b"})
     r = client.get("/hold")
     assert r.status_code == 200
-    assert r.json()["total"] >= 2
+    assert r.json()["total_available"] >= 2
 
 
 def test_discover_metadata_fields():
@@ -123,6 +125,23 @@ def test_discover_no_payload_bytes():
     r = client.get("/hold")
     for item in r.json()["items"]:
         assert "payload" not in item
+
+
+def test_discover_respects_limit_and_offset():
+    for i in range(5):
+        client.post("/hold", json={"payload": f"page-{i}", "created_by": "pager"})
+    r = client.get("/hold?limit=2&offset=1")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["limit"] == 2
+    assert data["offset"] == 1
+    assert data["total"] <= 2
+    assert data["total_available"] >= data["total"]
+
+
+def test_discover_rejects_oversized_limit():
+    r = client.get("/hold?limit=101")
+    assert r.status_code == 422
 
 
 def test_hold_unicode():
