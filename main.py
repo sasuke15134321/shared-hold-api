@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
@@ -45,7 +45,7 @@ app = FastAPI(
         "SQLite-backed shared boundary storage for AI agents. "
         "POST /hold stores a UTF-8 payload (paid: 0.005 USDC). "
         "GET /hold/{id} retrieves by hold_id (free). "
-        "GET /hold lists all stored item metadata (free). "
+        "GET /hold lists stored item metadata in bounded pages (free). "
         "Payload is stored with SHA-256 integrity verification. "
         "Non-destructive: GET never removes or transitions the payload state."
     ),
@@ -220,16 +220,21 @@ async def get_hold(hold_id: str):
 
 @app.get(
     "/hold",
-    summary="Discover — List all stored items (free)",
+    summary="Discover — List stored item metadata (free, paginated)",
     description=(
-        "Returns metadata for all stored items: hold_id, created_at, created_by, content_hash, size. "
-        "Payload bytes are not included. Free, no payment required."
+        "Returns a bounded page of stored-item metadata: hold_id, created_at, created_by, content_hash, size. "
+        "Payload bytes are not included. Free, no payment required. "
+        "Use limit (1-100, default 100) and offset (default 0) to page through results."
     ),
     tags=["Core"],
     openapi_extra={"security": []},
 )
-async def discover():
-    rows = _core.discover()
+async def discover(
+    limit: int = Query(default=100, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+):
+    rows = _core.discover_page(limit=limit, offset=offset)
+    total_available = _core.count()
     return {
         "items": [
             {
@@ -242,6 +247,10 @@ async def discover():
             for r in rows
         ],
         "total": len(rows),
+        "total_available": total_available,
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + len(rows) < total_available,
     }
 
 
@@ -266,7 +275,7 @@ async def root():
         "endpoints": {
             "hold":     "POST /hold (paid: 0.005 USDC per successful hold)",
             "get":      "GET /hold/{id} (free)",
-            "discover": "GET /hold (free)",
+            "discover": "GET /hold?limit=100&offset=0 (free, paginated)",
             "health":   "GET /health (free)",
             "discovery": "GET /.well-known/x402.json (free)",
         },
@@ -351,7 +360,7 @@ async def mcp_server_card():
             },
             {
                 "name": "discover",
-                "description": "List all stored items with metadata (hold_id, created_at, created_by, content_hash, size). Free. Payload bytes are not included.",
+                "description": "List a bounded page of stored-item metadata (hold_id, created_at, created_by, content_hash, size). Free. Payload bytes are not included.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {},
