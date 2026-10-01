@@ -174,3 +174,90 @@ def test_discover_free_no_payment_header():
     _main_module.TEST_MODE = False
     r = client.get("/hold")
     assert r.status_code == 200
+
+
+def test_request_body_over_2mb_rejected():
+    _main_module.TEST_MODE = True
+    oversized = b"x" * (_main_module.MAX_REQUEST_BODY_BYTES + 1)
+    r = client.post(
+        "/hold",
+        content=oversized,
+        headers={"content-type": "application/json"},
+    )
+    assert r.status_code == 413
+
+
+def test_request_body_over_2mb_without_content_length_rejected():
+    import asyncio
+
+    downstream_called = False
+    sent = []
+
+    async def downstream(scope, receive, send):
+        nonlocal downstream_called
+        downstream_called = True
+
+        while True:
+            message = await receive()
+            if (
+                message["type"] == "http.request"
+                and not message.get("more_body", False)
+            ):
+                break
+
+        await send({
+            "type": "http.response.start",
+            "status": 200,
+            "headers": [],
+        })
+        await send({
+            "type": "http.response.body",
+            "body": b"OK",
+        })
+
+    app = _main_module.RequestBodyLimitMiddleware(
+        downstream,
+        max_body_size=_main_module.MAX_REQUEST_BODY_BYTES,
+    )
+
+    chunks = [
+        {
+            "type": "http.request",
+            "body": b"x" * (1024 * 1024),
+            "more_body": True,
+        },
+        {
+            "type": "http.request",
+            "body": b"x" * (1024 * 1024),
+            "more_body": True,
+        },
+        {
+            "type": "http.request",
+            "body": b"x",
+            "more_body": False,
+        },
+    ]
+
+    async def receive():
+        return chunks.pop(0)
+
+    async def send(message):
+        sent.append(message)
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/hold",
+        "headers": [],
+    }
+
+    asyncio.run(app(scope, receive, send))
+
+    statuses = [
+        message["status"]
+        for message in sent
+        if message["type"] == "http.response.start"
+    ]
+
+    assert downstream_called is True
+    assert statuses == [413]

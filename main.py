@@ -12,7 +12,6 @@ sys.path.insert(0, str(Path(__file__).parent))
 from fastapi import FastAPI, Request, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
-from starlette.middleware.body_limit import RequestBodyLimitMiddleware
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 from contextlib import asynccontextmanager
@@ -26,6 +25,63 @@ TEST_MODE = os.getenv("TEST_MODE", "false").lower() == "true"
 MAX_PAYLOAD_BYTES = 256 * 1024
 MAX_CREATED_BY_CHARS = 128
 MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024
+
+class RequestBodyLimitMiddleware:
+    def __init__(self, app, max_body_size: int):
+        self.app = app
+        self.max_body_size = max_body_size
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        headers = dict(scope.get("headers", []))
+        content_length = headers.get(b"content-length")
+
+        if content_length is not None:
+            try:
+                if int(content_length) > self.max_body_size:
+                    await self._send_413(send)
+                    return
+            except ValueError:
+                pass
+
+        received = 0
+
+        async def limited_receive():
+            nonlocal received
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > self.max_body_size:
+                    raise _RequestBodyTooLarge()
+            return message
+
+        try:
+            await self.app(scope, limited_receive, send)
+        except _RequestBodyTooLarge:
+            await self._send_413(send)
+
+    @staticmethod
+    async def _send_413(send):
+        body = b'{"detail":"Request body too large"}'
+        await send({
+            "type": "http.response.start",
+            "status": 413,
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode("ascii")),
+            ],
+        })
+        await send({
+            "type": "http.response.body",
+            "body": body,
+        })
+
+
+class _RequestBodyTooLarge(Exception):
+    pass
 DB_PATH = os.getenv("SHARED_HOLD_DB_PATH", str(Path(__file__).parent / "shared_hold.db"))
 
 _NETWORK = "eip155:8453"
@@ -57,6 +113,11 @@ app = FastAPI(
 )
 
 app.add_middleware(
+    RequestBodyLimitMiddleware,
+    max_body_size=MAX_REQUEST_BODY_BYTES,
+)
+
+app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
@@ -85,10 +146,6 @@ async def hold_payment_gate(request: Request, call_next):
     return await call_next(request)
 
 
-app.add_middleware(
-    RequestBodyLimitMiddleware,
-    max_body_size=MAX_REQUEST_BODY_BYTES,
-)
 
 def _payment_required_body(method: str, url: str) -> dict:
     amount_units = str(round(float(PRICE_USDC) * 1_000_000))
