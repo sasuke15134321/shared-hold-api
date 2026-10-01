@@ -153,12 +153,32 @@ def test_hold_unicode():
 
 
 def test_hold_requires_payment_without_test_mode():
+    import base64
+    import json
+
     _main_module.TEST_MODE = False
     r = client.post("/hold", json={"payload": "pay me", "created_by": "a"})
+
     assert r.status_code == 402
-    data = r.json()
-    assert data.get("x402Version") == 2
-    assert "accepts" in data
+
+    payment_required = r.headers.get("Payment-Required")
+    assert payment_required is not None
+
+    data = json.loads(
+        base64.b64decode(payment_required).decode("utf-8")
+    )
+
+    assert data["x402Version"] == 2
+    assert len(data["accepts"]) == 1
+
+    requirement = data["accepts"][0]
+    assert requirement["scheme"] == "exact"
+    assert requirement["network"] == "eip155:8453"
+    assert requirement["amount"] == "5000"
+    assert requirement["payTo"].lower() == _main_module.WALLET_ADDRESS.lower()
+
+    assert "extensions" in data
+    assert "bazaar" in data["extensions"]
 
 
 def test_get_hold_free_no_payment_header():

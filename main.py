@@ -4,7 +4,7 @@
 Shared Hold API v0.1
 SQLite-backed shared boundary storage for AI agents. Pay-per-hold via x402.
 """
-import os, sys, json, base64
+import os, sys, json
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -16,7 +16,14 @@ from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 from contextlib import asynccontextmanager
 
-from payment_verifier import PaymentVerifier
+from payment_verifier import _generate_cdp_jwt
+from x402 import x402ResourceServer
+from x402.http.middleware.fastapi import payment_middleware
+from x402.http.types import RouteConfig, PaymentOption
+from x402.http.facilitator_client import HTTPFacilitatorClient
+from x402.http.facilitator_client_base import FacilitatorConfig, CreateHeadersAuthProvider
+from x402.mechanisms.evm.exact.register import register_exact_evm_server
+from x402.extensions.bazaar import declare_discovery_extension, OutputConfig
 from shared_hold import SharedHold
 
 WALLET_ADDRESS = os.getenv("WALLET_ADDRESS", "0x60c402878EfcEcAe5733A88075328Aa2320C39BE")
@@ -125,86 +132,102 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-payment_verifier = PaymentVerifier()
+_CDP_BASE_URL = "https://api.cdp.coinbase.com/platform/v2/x402"
+
+
+def _create_cdp_headers():
+    return {
+        "supported": {
+            "Authorization": "Bearer " + _generate_cdp_jwt(
+                "GET", "/platform/v2/x402/supported"
+            )
+        },
+        "verify": {
+            "Authorization": "Bearer " + _generate_cdp_jwt(
+                "POST", "/platform/v2/x402/verify"
+            )
+        },
+        "settle": {
+            "Authorization": "Bearer " + _generate_cdp_jwt(
+                "POST", "/platform/v2/x402/settle"
+            )
+        },
+    }
+
+
+_cdp_auth = CreateHeadersAuthProvider(_create_cdp_headers)
+
+_facilitator = HTTPFacilitatorClient(
+    FacilitatorConfig(
+        url=_CDP_BASE_URL,
+        auth_provider=_cdp_auth,
+    )
+)
+
+_x402_server = x402ResourceServer(_facilitator)
+register_exact_evm_server(_x402_server, _NETWORK)
+
+_bazaar_extension = declare_discovery_extension(
+    input={
+        "payload": "your-data-here",
+        "created_by": "agent-001",
+    },
+    input_schema={
+        "type": "object",
+        "properties": {
+            "payload": {"type": "string"},
+            "created_by": {"type": "string"},
+        },
+        "required": ["payload", "created_by"],
+    },
+    body_type="json",
+    output=OutputConfig(
+        example={
+            "hold_id": "c408edf5387a4686ac8f849c564baf36",
+            "content_hash": "08393bdd72e0d69ed5969a34cbde5a871e661216e1b36ca3610c0d9fe2ab8ec7",
+            "size": 15,
+            "created_at": "2026-09-17T06:49:12.022842+00:00",
+            "created_by": "agent-001",
+        },
+        schema={
+            "type": "object",
+            "properties": {
+                "hold_id": {"type": "string"},
+                "content_hash": {"type": "string"},
+                "size": {"type": "integer"},
+                "created_at": {"type": "string"},
+                "created_by": {"type": "string"},
+            },
+        },
+    ),
+)
+
+_x402_routes = {
+    "POST /hold": RouteConfig(
+        accepts=[
+            PaymentOption(
+                scheme="exact",
+                pay_to=WALLET_ADDRESS,
+                price=f"${PRICE_USDC}",
+                network=_NETWORK,
+            )
+        ],
+        description="Store payload to Shared Hold boundary - 0.005 USDC per successful hold",
+        mime_type="application/json",
+        extensions=_bazaar_extension,
+    )
+}
+
+_x402_payment_handler = payment_middleware(_x402_routes, _x402_server)
 _core = SharedHold(DB_PATH)
 
 
 @app.middleware("http")
-async def hold_payment_gate(request: Request, call_next):
-    if request.url.path == "/hold" and request.method == "POST":
-        if not TEST_MODE:
-            payment_header = (
-                request.headers.get("PAYMENT-SIGNATURE") or request.headers.get("X-PAYMENT")
-            )
-            if not payment_header:
-                body = _payment_required_body("POST", str(request.url))
-                return JSONResponse(
-                    status_code=402,
-                    content=body,
-                    headers={"Payment-Required": base64.b64encode(json.dumps(body).encode()).decode()},
-                )
+async def x402_middleware(request: Request, call_next):
+    if request.url.path == "/hold" and request.method == "POST" and not TEST_MODE:
+        return await _x402_payment_handler(request, call_next)
     return await call_next(request)
 
-
-
-def _payment_required_body(method: str, url: str) -> dict:
-    amount_units = str(round(float(PRICE_USDC) * 1_000_000))
-    return {
-        "x402Version": 2,
-        "error": "Payment required",
-        "resource": {
-            "url": url,
-            "method": method,
-            "description": "Store payload to Shared Hold boundary — 0.005 USDC per successful hold",
-            "mimeType": "application/json",
-        },
-        "accepts": [{
-            "scheme": "exact",
-            "network": _NETWORK,
-            "amount": amount_units,
-            "asset": _USDC_ADDRESS,
-            "payTo": WALLET_ADDRESS,
-            "maxTimeoutSeconds": 300,
-            "extra": {"name": "USD Coin", "version": "2"},
-            "resource": {"method": method, "mimeType": "application/json"},
-        }],
-        "extensions": {
-            "bazaar": {
-                "discoverable": True,
-                "info": {
-                    "input": {
-                        "type": "http",
-                        "method": "POST",
-                        "bodyType": "json",
-                        "body": {
-                            "payload": "your-data-here",
-                            "created_by": "agent-001",
-                        },
-                    },
-                    "output": {
-                        "type": "json",
-                        "example": {
-                            "hold_id": "c408edf5387a4686ac8f849c564baf36",
-                            "content_hash": "08393bdd72e0d69ed5969a34cbde5a871e661216e1b36ca3610c0d9fe2ab8ec7",
-                            "size": 15,
-                            "created_at": "2026-09-17T06:49:12.022842+00:00",
-                            "created_by": "agent-001",
-                        },
-                    },
-                },
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "hold_id": {"type": "string"},
-                        "content_hash": {"type": "string"},
-                        "size": {"type": "integer"},
-                        "created_at": {"type": "string"},
-                        "created_by": {"type": "string"},
-                    },
-                },
-            }
-        },
-    }
 
 
 class HoldRequest(BaseModel):
@@ -251,14 +274,6 @@ class HoldReceiptResponse(BaseModel):
     tags=["Core"],
 )
 async def hold(payload: HoldRequest, request: Request):
-    if not TEST_MODE:
-        payment_header = (
-            request.headers.get("PAYMENT-SIGNATURE") or request.headers.get("X-PAYMENT")
-        )
-        is_valid = await payment_verifier.verify_payment(payment_header, WALLET_ADDRESS, PRICE_USDC)
-        if not is_valid:
-            raise HTTPException(status_code=402, detail="Payment verification failed")
-
     try:
         data = payload.payload.encode("utf-8")
         receipt = _core.hold(data, created_by=payload.created_by)
