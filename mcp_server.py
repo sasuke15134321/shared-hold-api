@@ -45,18 +45,24 @@ async def hold(payload: str, created_by: str) -> str:
 
 
 @mcp.tool()
-async def get(hold_id: str) -> str:
+async def get(hold_id: str, access_token: str) -> str:
     """
-    Retrieve a stored payload by hold_id. Free, non-destructive, idempotent.
-    Returns {hold_id, payload}. Returns error if not found.
+    Retrieve a stored payload using its capability token. Free and non-destructive.
 
     Args:
-        hold_id: The hold_id returned by the hold tool
+        hold_id: Identifier returned by hold
+        access_token: Secret retrieval token returned by hold
     """
     async with httpx.AsyncClient(timeout=60.0) as client:
-        resp = await client.get(f"{BASE_URL}/hold/{hold_id}")
+        resp = await client.get(
+            f"{BASE_URL}/hold/{hold_id}",
+            headers={"X-Hold-Token": access_token},
+        )
         if resp.status_code == 404:
-            return json.dumps({"error": f"hold_id not found: {hold_id}"}, ensure_ascii=False)
+            return json.dumps(
+                {"error": "Not found or invalid access token"},
+                ensure_ascii=False,
+            )
         resp.raise_for_status()
         return json.dumps(resp.json(), ensure_ascii=False, indent=2)
 
@@ -64,8 +70,7 @@ async def get(hold_id: str) -> str:
 @mcp.tool()
 async def discover() -> str:
     """
-    List all stored items with metadata (hold_id, created_at, created_by, content_hash, size).
-    Free. Payload bytes are not included.
+    Return public Shared Hold capabilities only. No stored-item metadata is exposed.
     """
     async with httpx.AsyncClient(timeout=60.0) as client:
         resp = await client.get(f"{BASE_URL}/hold")

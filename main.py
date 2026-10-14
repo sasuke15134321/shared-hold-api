@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from fastapi import FastAPI, Request, HTTPException, Query
+from fastapi import FastAPI, Header, Request, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field, field_validator
@@ -111,8 +111,8 @@ app = FastAPI(
     description=(
         "SQLite-backed shared boundary storage for AI agents. "
         "POST /hold stores a UTF-8 payload (paid: 0.005 USDC). "
-        "GET /hold/{id} retrieves by hold_id (free). "
-        "GET /hold lists stored item metadata in bounded pages (free). "
+        "GET /hold/{id} requires X-Hold-Token (free). "
+        "GET /hold returns public service capabilities only (free). "
         "Payload is stored with SHA-256 integrity verification. "
         "Non-destructive: GET never removes or transitions the payload state."
     ),
@@ -188,6 +188,7 @@ _bazaar_extension = declare_discovery_extension(
             "size": 15,
             "created_at": "2026-09-17T06:49:12.022842+00:00",
             "created_by": "agent-001",
+            "access_token": "<access-token-returned-on-creation>",
         },
         schema={
             "type": "object",
@@ -197,6 +198,7 @@ _bazaar_extension = declare_discovery_extension(
                 "size": {"type": "integer"},
                 "created_at": {"type": "string"},
                 "created_by": {"type": "string"},
+                "access_token": {"type": "string"},
             },
         },
     ),
@@ -254,6 +256,7 @@ class HoldRequest(BaseModel):
         return value
 
 class HoldReceiptResponse(BaseModel):
+    access_token: str
     hold_id: str
     content_hash: str
     size: int
@@ -283,6 +286,7 @@ async def hold(payload: HoldRequest, request: Request):
             "size": receipt.size,
             "created_at": receipt.created_at,
             "created_by": receipt.created_by,
+            "access_token": receipt.access_token,
         }
     except (TypeError, ValueError) as e:
         raise HTTPException(status_code=422, detail=str(e))
@@ -292,57 +296,40 @@ async def hold(payload: HoldRequest, request: Request):
 
 @app.get(
     "/hold/{hold_id}",
-    summary="Get — Retrieve stored payload by ID (free)",
-    description=(
-        "Returns the stored UTF-8 payload for the given hold_id. "
-        "Free, non-destructive, and idempotent — same hold_id always returns the same payload."
-    ),
+    summary="Retrieve held payload with capability token (free)",
+    description="Requires X-Hold-Token. Retrieval is free and non-destructive.",
     tags=["Core"],
     openapi_extra={"security": []},
 )
-async def get_hold(hold_id: str):
+async def get_hold(
+    hold_id: str,
+    token: str | None = Header(default=None, alias="X-Hold-Token"),
+):
     try:
-        raw = _core.get(hold_id)
-        return {"hold_id": hold_id, "payload": raw.decode("utf-8", errors="replace")}
+        raw = _core.get(hold_id, access_token=token)
+        return {
+            "hold_id": hold_id,
+            "payload": raw.decode("utf-8", errors="replace"),
+        }
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"hold_id not found: {hold_id}")
-    except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=404, detail="Not found")
+    except RuntimeError:
+        raise HTTPException(status_code=500, detail="Integrity failure")
 
 
 @app.get(
     "/hold",
-    summary="Discover — List stored item metadata (free, paginated)",
-    description=(
-        "Returns a bounded page of stored-item metadata: hold_id, created_at, created_by, content_hash, size. "
-        "Payload bytes are not included. Free, no payment required. "
-        "Use limit (1-100, default 100) and offset (default 0) to page through results."
-    ),
+    summary="Shared Hold discovery status (free)",
+    description="Public service capability only. No held-item metadata is exposed.",
     tags=["Core"],
     openapi_extra={"security": []},
 )
-async def discover(
-    limit: int = Query(default=100, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
-):
-    rows = _core.discover_page(limit=limit, offset=offset)
-    total_available = _core.count()
+async def discover():
     return {
-        "items": [
-            {
-                "hold_id": r[0],
-                "created_at": r[1],
-                "created_by": r[2],
-                "content_hash": r[3],
-                "size": r[4],
-            }
-            for r in rows
-        ],
-        "total": len(rows),
-        "total_available": total_available,
-        "limit": limit,
-        "offset": offset,
-        "has_more": offset + len(rows) < total_available,
+        "service": "Shared Hold",
+        "hold_supported": True,
+        "get_requires_token": True,
+        "retrieval_payment_required": False,
     }
 
 
@@ -418,7 +405,7 @@ async def skill_md():
 @app.get("/openapi.yaml", include_in_schema=False)
 async def openapi_yaml_endpoint():
     return PlainTextResponse(
-        open(Path(__file__).parent / "openapi.yaml").read(), media_type="text/yaml"
+        open(Path(__file__).parent / "openapi.yaml", encoding="utf-8").read(), media_type="text/yaml"
     )
 
 
@@ -429,7 +416,7 @@ async def mcp_server_card():
         "tools": [
             {
                 "name": "hold",
-                "description": "Store a UTF-8 payload to the shared boundary (0.005 USDC). Returns hold_id, content_hash, size, created_at, created_by.",
+                "description": "Store a UTF-8 payload to the shared boundary (0.005 USDC). Returns hold_id, content_hash, size, created_at, created_by and a secret access_token.",
                 "inputSchema": {
                     "type": "object",
                     "required": ["payload", "created_by"],
@@ -441,18 +428,19 @@ async def mcp_server_card():
             },
             {
                 "name": "get",
-                "description": "Retrieve a stored payload by hold_id. Free, non-destructive, idempotent. Returns {hold_id, payload}.",
+                "description": "Retrieve a stored payload with hold_id and access_token. Free, non-destructive, idempotent. Returns {hold_id, payload}.",
                 "inputSchema": {
                     "type": "object",
-                    "required": ["hold_id"],
+                    "required": ["hold_id", "access_token"],
                     "properties": {
                         "hold_id": {"type": "string", "description": "The hold_id returned by the hold tool"},
+                        "access_token": {"type": "string", "description": "Secret retrieval token returned by hold"},
                     },
                 },
             },
             {
                 "name": "discover",
-                "description": "List a bounded page of stored-item metadata (hold_id, created_at, created_by, content_hash, size). Free. Payload bytes are not included.",
+                "description": "Return public service capabilities only. No held-item metadata is exposed. Free.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {},

@@ -7,8 +7,8 @@ SQLite-backed shared boundary storage for AI agents. Pay-per-hold via x402 USDC 
 | Method | Path | Cost | Description |
 |--------|------|------|-------------|
 | POST | /hold | 0.005 USDC | Store UTF-8 payload to shared boundary |
-| GET | /hold/{id} | free | Retrieve stored payload by hold_id |
-| GET | /hold | free | List all stored item metadata |
+| GET | /hold/{id} | free | Retrieve with hold_id and X-Hold-Token |
+| GET | /hold | free | Public capabilities only; no stored records |
 | GET | /health | free | Health check |
 | GET | /.well-known/x402.json | free | x402 endpoint discovery |
 | GET | /ai-agent-policy.json | free | Agent policy |
@@ -19,8 +19,8 @@ SQLite-backed shared boundary storage for AI agents. Pay-per-hold via x402 USDC 
 ## Key design decision
 
 There is no "restore" or "release" endpoint. GET /hold/{id} is non-destructive and idempotent —
-the same hold_id always returns the same payload. Payloads are always in HELD state and readable
-any number of times.
+authorized requests return the same payload. Retrieval requires the access_token returned by POST /hold.
+Keep this bearer token secure; only its SHA-256 hash is stored.
 
 ## Quick start (local, TEST_MODE)
 
@@ -37,12 +37,12 @@ curl -X POST http://localhost:8000/hold \
   -d '{"payload": "hello from agent", "created_by": "agent-001"}'
 ```
 
-Retrieve (use hold_id from above response):
+Retrieve (use hold_id and access_token from the POST response):
 ```bash
-curl http://localhost:8000/hold/<hold_id>
+curl -H "X-Hold-Token: <access_token>" http://localhost:8000/hold/<hold_id>
 ```
 
-List all:
+Discover public capabilities (not stored records):
 ```bash
 curl http://localhost:8000/hold
 ```
@@ -55,7 +55,7 @@ Without a valid X-PAYMENT header, POST /hold returns HTTP 402 with x402 v2 requi
 - Amount: 5000 (0.005 USDC in micro-units)
 - Recipient: 0x60c402878EfcEcAe5733A88075328Aa2320C39BE
 
-GET endpoints always return 200 without any payment.
+GET endpoints are free. Payload retrieval requires X-Hold-Token; missing or invalid tokens return 404.
 
 ## Core
 

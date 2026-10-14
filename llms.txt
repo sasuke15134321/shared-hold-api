@@ -22,6 +22,7 @@ Output:
 - size: byte length
 - created_at: ISO 8601 UTC timestamp
 - created_by: echo of the caller identifier
+- access_token: one-time bearer capability; retain securely (only its SHA-256 hash is stored)
 
 If you receive HTTP 402 Payment Required:
 1. Read the x402Version=2 payment requirements in the response body.
@@ -29,20 +30,23 @@ If you receive HTTP 402 Payment Required:
 3. Retry the same request with the payment in the X-PAYMENT or PAYMENT-SIGNATURE header.
 
 ### GET /hold/{hold_id} (free)
-Retrieve the stored UTF-8 payload by hold_id.
+Retrieve the stored UTF-8 payload using hold_id and the X-Hold-Token request header.
 
 Output:
 - hold_id: the requested ID
 - payload: the stored UTF-8 text
 
-Returns 404 if hold_id does not exist.
+Returns 404 if the record does not exist or the token is missing or invalid.
 
 ### GET /hold (free)
-List all stored items with metadata (no payload bytes).
+Returns public service capabilities only; no stored IDs, metadata, counts, or payloads.
 
 Output:
-- items: list of {hold_id, created_at, created_by, content_hash, size}
-- total: count of items
+- service: service identifier
+- hold_supported: boolean
+- get_requires_token: true
+- retrieval_payment_required: false
+
 
 ## Free endpoints
 GET /health — health check
@@ -51,7 +55,7 @@ GET /ai-agent-policy.json — agent policy
 
 ## Key properties
 - Non-destructive: GET never removes or modifies the stored payload
-- Idempotent reads: same hold_id always returns the same payload
+- Idempotent authorized reads: same hold_id and valid token return the same payload
 - SHA-256 integrity: corrupted payloads raise RuntimeError (HTTP 500)
 - No state machine: there is no HELD/ACTIVE/RELEASED transition
 
@@ -60,5 +64,5 @@ GET /ai-agent-policy.json — agent policy
 - Asset: USDC (0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913)
 - Recipient: 0x60c402878EfcEcAe5733A88075328Aa2320C39BE
 - Price: 0.005 USDC per successful POST /hold
-- GET /hold/{id} and GET /hold are always free
+- GET /hold/{id} and GET /hold are free; retrieval requires X-Hold-Token
 - Protocol: x402 v2 (scheme: exact)
