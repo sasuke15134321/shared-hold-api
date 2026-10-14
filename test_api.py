@@ -152,9 +152,28 @@ def test_hold_unicode():
     assert g.json()["payload"] == "日本語テスト🎌"
 
 
-def test_hold_requires_payment_without_test_mode():
+def test_hold_requires_payment_without_test_mode(monkeypatch):
     import base64
     import json
+
+    from x402.schemas.responses import SupportedResponse
+
+    def fake_get_supported():
+        return SupportedResponse(
+            kinds=[{
+                "x402Version": 2,
+                "scheme": "exact",
+                "network": "eip155:8453",
+            }],
+            extensions=[],
+            signers={},
+        )
+
+    monkeypatch.setattr(
+        _main_module._facilitator,
+        "get_supported",
+        fake_get_supported,
+    )
 
     _main_module.TEST_MODE = False
     r = client.post("/hold", json={"payload": "pay me", "created_by": "a"})
