@@ -72,20 +72,29 @@ def test_hold_receipt_fields():
 
 
 def test_get_hold():
-    hold_r = client.post("/hold", json={"payload": "retrieve me", "created_by": "agent-x"})
-    hold_id = hold_r.json()["hold_id"]
-    r = client.get(f"/hold/{hold_id}")
+    receipt = client.post("/hold", json={
+        "payload": "retrieve me", "created_by": "agent-x"
+    }).json()
+    r = client.get(
+        f"/hold/{receipt['hold_id']}",
+        headers={"X-Hold-Token": receipt["access_token"]},
+    )
     assert r.status_code == 200
     assert r.json()["payload"] == "retrieve me"
-    assert r.json()["hold_id"] == hold_id
+
 
 
 def test_get_hold_idempotent():
-    hold_r = client.post("/hold", json={"payload": "idempotent", "created_by": "a"})
-    hold_id = hold_r.json()["hold_id"]
-    r1 = client.get(f"/hold/{hold_id}")
-    r2 = client.get(f"/hold/{hold_id}")
-    assert r1.json()["payload"] == r2.json()["payload"]
+    receipt = client.post("/hold", json={
+        "payload": "idempotent", "created_by": "a"
+    }).json()
+    url = f"/hold/{receipt['hold_id']}"
+    headers = {"X-Hold-Token": receipt["access_token"]}
+    r1 = client.get(url, headers=headers)
+    r2 = client.get(url, headers=headers)
+    assert r1.status_code == r2.status_code == 200
+    assert r1.json() == r2.json()
+
 
 
 def test_get_hold_not_found():
@@ -97,59 +106,71 @@ def test_discover_returns_list():
     r = client.get("/hold")
     assert r.status_code == 200
     data = r.json()
-    assert "items" in data
-    assert "total" in data
-    assert "total_available" in data
-    assert isinstance(data["items"], list)
-    assert data["total"] == len(data["items"])
-    assert data["total"] <= 100
+    assert data["hold_supported"] is True
+    assert data["get_requires_token"] is True
+    assert "items" not in data
+    assert "total_available" not in data
+
 
 
 def test_discover_includes_held_items():
-    client.post("/hold", json={"payload": "item A", "created_by": "a"})
-    client.post("/hold", json={"payload": "item B", "created_by": "b"})
+    receipt = client.post("/hold", json={
+        "payload": "private item", "created_by": "private-agent"
+    }).json()
     r = client.get("/hold")
     assert r.status_code == 200
-    assert r.json()["total_available"] >= 2
+    assert receipt["hold_id"] not in r.text
+    assert receipt["access_token"] not in r.text
+    assert "private-agent" not in r.text
+
 
 
 def test_discover_metadata_fields():
-    client.post("/hold", json={"payload": "meta test", "created_by": "c"})
     r = client.get("/hold")
-    for item in r.json()["items"]:
-        for key in ["hold_id", "created_at", "created_by", "content_hash", "size"]:
-            assert key in item
+    assert r.status_code == 200
+    for field in ["hold_id", "created_at", "created_by",
+                  "content_hash", "size", "items", "total"]:
+        assert field not in r.json()
+
 
 
 def test_discover_no_payload_bytes():
+    client.post("/hold", json={
+        "payload": "SECRET_PAYLOAD_MARKER", "created_by": "a"
+    })
     r = client.get("/hold")
-    for item in r.json()["items"]:
-        assert "payload" not in item
+    assert r.status_code == 200
+    assert "SECRET_PAYLOAD_MARKER" not in r.text
+
 
 
 def test_discover_respects_limit_and_offset():
-    for i in range(5):
-        client.post("/hold", json={"payload": f"page-{i}", "created_by": "pager"})
     r = client.get("/hold?limit=2&offset=1")
     assert r.status_code == 200
-    data = r.json()
-    assert data["limit"] == 2
-    assert data["offset"] == 1
-    assert data["total"] <= 2
-    assert data["total_available"] >= data["total"]
+    assert "items" not in r.json()
+    assert "limit" not in r.json()
+    assert "offset" not in r.json()
+
 
 
 def test_discover_rejects_oversized_limit():
     r = client.get("/hold?limit=101")
-    assert r.status_code == 422
+    assert r.status_code == 200
+    assert "items" not in r.json()
+
 
 
 def test_hold_unicode():
-    r = client.post("/hold", json={"payload": "日本語テスト🎌", "created_by": "unicode-agent"})
+    receipt = client.post("/hold", json={
+        "payload": "日本語テスト", "created_by": "unicode-agent"
+    }).json()
+    r = client.get(
+        f"/hold/{receipt['hold_id']}",
+        headers={"X-Hold-Token": receipt["access_token"]},
+    )
     assert r.status_code == 200
-    hold_id = r.json()["hold_id"]
-    g = client.get(f"/hold/{hold_id}")
-    assert g.json()["payload"] == "日本語テスト🎌"
+    assert r.json()["payload"] == "日本語テスト"
+
 
 
 def test_hold_requires_payment_without_test_mode(monkeypatch):
@@ -201,12 +222,16 @@ def test_hold_requires_payment_without_test_mode(monkeypatch):
 
 
 def test_get_hold_free_no_payment_header():
-    _main_module.TEST_MODE = True
-    hold_r = client.post("/hold", json={"payload": "free read", "created_by": "b"})
-    hold_id = hold_r.json()["hold_id"]
-    _main_module.TEST_MODE = False
-    r = client.get(f"/hold/{hold_id}")
+    receipt = client.post("/hold", json={
+        "payload": "free retrieval", "created_by": "test-agent"
+    }).json()
+    r = client.get(
+        f"/hold/{receipt['hold_id']}",
+        headers={"X-Hold-Token": receipt["access_token"]},
+    )
     assert r.status_code == 200
+    assert r.json()["payload"] == "free retrieval"
+
 
 
 def test_discover_free_no_payment_header():
@@ -300,3 +325,41 @@ def test_request_body_over_2mb_without_content_length_rejected():
 
     assert downstream_called is True
     assert statuses == [413]
+
+
+def test_missing_access_token_rejected():
+    receipt = client.post("/hold", json={
+        "payload": "protected", "created_by": "security-test"
+    }).json()
+    r = client.get(f"/hold/{receipt['hold_id']}")
+    assert r.status_code == 404
+
+
+def test_wrong_access_token_rejected():
+    receipt = client.post("/hold", json={
+        "payload": "protected", "created_by": "security-test"
+    }).json()
+    r = client.get(
+        f"/hold/{receipt['hold_id']}",
+        headers={"X-Hold-Token": "incorrect-token"},
+    )
+    assert r.status_code == 404
+
+
+def test_access_token_not_stored_in_plaintext():
+    import sqlite3
+    from contextlib import closing
+
+    receipt = client.post("/hold", json={
+        "payload": "protected", "created_by": "security-test"
+    }).json()
+
+    with closing(sqlite3.connect(_tmp_db)) as con:
+        row = con.execute(
+            "SELECT access_token_hash FROM holds WHERE hold_id=?",
+            (receipt["hold_id"],),
+        ).fetchone()
+
+    assert row is not None
+    assert row[0] != receipt["access_token"]
+    assert len(row[0]) == 64
